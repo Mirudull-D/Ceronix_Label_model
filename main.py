@@ -1,72 +1,57 @@
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, File, UploadFile
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from ultralytics import YOLO
 from pathlib import Path
-import base64, io, time
-from PIL import Image
-import numpy as np
-import shutil
+import shutil, uuid, os
 
 app = FastAPI()
 
-# Allow requests from your frontend origin
+# Allow frontend calls
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # allow all origins during development
+    allow_origins=["*"],  # or ["http://localhost:5173"]
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 model = YOLO("runs/detect/train/weights/best.pt")
+UPLOAD_DIR = Path("uploads")
+OUTPUT_DIR = Path("output")
+UPLOAD_DIR.mkdir(exist_ok=True)
+OUTPUT_DIR.mkdir(exist_ok=True)
 
-class ImagePayload(BaseModel):
-    image: str  # Base64 string
+# Serve output images
+app.mount("/output", StaticFiles(directory="output"), name="output")
 
-@app.post("/predict")
-async def predict(payload: ImagePayload):
-    try:
-        # Decode base64 → PIL image
-        image_bytes = base64.b64decode(payload.image.split(",")[-1])
-        img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
 
-        # Save temporary input
-        timestamp = str(int(time.time() * 1000))
-        input_path = Path(f"temp_input_{timestamp}.jpg")
-        img.save(input_path)
+@app.post("/predict1")
+async def predict(file: UploadFile = File(...)):
+    input_path = UPLOAD_DIR / f"{uuid.uuid4()}_{file.filename}"
+    with input_path.open("wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
 
-        # Run YOLO
-        run_dir = Path("temp_output")
-        results = model.predict(
-            source=str(input_path),
-            save=True,
-            project=str(run_dir),
-            name=f"predict_{timestamp}",
-            exist_ok=False
-        )
+    results = model.predict(
+        source=str(input_path),
+        save=True,
+        project=str(OUTPUT_DIR),
+        name="my_run",
+        exist_ok=True
+    )
 
-        # Get YOLO output image
-        out_dir = run_dir / f"predict_{timestamp}"
-        out_files = list(out_dir.glob("*.jpg")) + list(out_dir.glob("*.png"))
-        if not out_files:
-            return JSONResponse({"labels": [], "output_image": ""})
 
-        with open(out_files[0], "rb") as f:
-            output_b64 = base64.b64encode(f.read()).decode("utf-8")
+    save_dir = Path(results[0].save_dir)
+    output_files = list(save_dir.glob("*.jpg"))
+    if not output_files:
+        return JSONResponse({"error": "No output image generated"}, status_code=500)
 
-        labels = []
-        if results and len(results) > 0:
-            for box in results[0].boxes:
-                labels.append(model.names[int(box.cls[0])])
+    output_image_path = output_files[0]
+    output_url = f"/output/my_run/{output_image_path.name}"
 
-        # Clean temp files if desired
 
-        return JSONResponse({
-            "labels": labels,
-            "output_image": f"data:image/jpeg;base64,{output_b64}"
-        })
+    labels = [results[0].names[int(c)]
+              for c in results[0].boxes.cls.cpu().numpy()] if results[0].boxes else []
 
-    except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+    return {"output_url": output_url, "labels": labels}
