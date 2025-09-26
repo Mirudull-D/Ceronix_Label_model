@@ -103,4 +103,4 @@ auto_augment: randaugment
 erasing: 0.4
 cfg: null
 tracker: botsort.yaml
-save_dir: D:\VS_programs\Ceronix\runs\detect\train
+save_dir: D:\VS_programs\front_end\Ceronix_Label_model\prediction

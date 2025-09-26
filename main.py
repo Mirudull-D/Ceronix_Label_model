@@ -53,5 +53,6 @@ async def predict(file: UploadFile = File(...)):
 
     labels = [results[0].names[int(c)]
               for c in results[0].boxes.cls.cpu().numpy()] if results[0].boxes else []
-
+    print(labels)
     return {"output_url": output_url, "labels": labels}
+#python -m uvicorn main:app --reload --port 8000
